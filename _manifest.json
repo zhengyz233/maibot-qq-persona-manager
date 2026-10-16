@@ -1,9 +1,9 @@
 {
   "manifest_version": 2,
   "id": "local.qq-persona-manager",
-  "version": "1.4.0",
-  "name": "QQ 人格管理（查询 / 修改）",
-  "description": "白名单鉴权的 QQ 指令插件：/人格查询 以合并转发展示 #人设 / #行为风格 / #表达风格，每段正文最前面自带分类标签（默认仅私聊，可开启群聊开关）；/人格修改 需求 由 replyer/planner 模型判定分类后热更新 bot_config.toml。",
+  "version": "1.5.0",
+  "name": "QQ 人格管理（查询 / 修改 / 优化）",
+  "description": "白名单鉴权的 QQ 指令插件：/人格查询 以合并转发展示 #人设 / #行为风格 / #表达风格，每段正文最前面自带分类标签（默认仅私聊，可开启群聊开关）；/人格修改 需求 由 replyer/planner 模型判定分类后热更新 bot_config.toml；/人格优化 让模型重新分类并压缩三段人格、保持语义不变以降低 token 开销（默认仅私聊，可单独开启群聊开关）。",
   "author": {
     "name": "zhengyz233",
     "url": "https://github.com/zhengyz233"

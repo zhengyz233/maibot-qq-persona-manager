@@ -1,8 +1,8 @@
-"""QQ 人格管理插件 —— /人格查询 与 /人格修改
+"""QQ 人格管理插件 —— /人格查询、/人格修改、/人格优化
 
 适配 MaiBot v1.3.x 新版插件 SDK（maibot-plugin-sdk 2.x）。
 
-三个能力：
+四个能力：
 1. 白名单鉴权：只有白名单里的 QQ 号能触发指令，其他人收到"您无权进行此类操作"。
 2. /人格查询：把当前人格拆成 #人设 / #行为风格 / #表达风格 三段，
    以 QQ 合并转发（聊天记录卡片）的形式发送到指令所在的聊天流。
@@ -12,6 +12,10 @@
 3. /人格修改 需求：用 MaiBot 的 replyer / planner 模型判断需求属于哪一类
    （人设 / 行为风格 / 表达风格），与当前对应分类的原文融合后，
    直接写回 config/bot_config.toml，由 MaiBot 的文件监视器完成热重载。
+4. /人格优化：读当前人格交给模型重新分类 + 压缩，在保持语义不变的前提下
+   把三段缩短，减少每次请求的人格 token 开销。分类出错时一并纠正
+   （谁 / 什么时候说话 / 怎么说话）。同样默认【只在私聊生效】，
+   群聊需要打开 scope.optimize_allow_group。
 
 注意：本插件不 import MaiBot 主程序（插件运行在独立 Runner 子进程里，
 只能使用 maibot_sdk 与 Python 标准库）。
@@ -81,6 +85,7 @@ CATEGORY_ALIASES: dict[str, str] = {
 
 COMMAND_QUERY = "人格查询"
 COMMAND_UPDATE = "人格修改"
+COMMAND_OPTIMIZE = "人格优化"
 COMMAND_HELP = "人格帮助"
 
 #: 消息来源场景
@@ -96,11 +101,13 @@ DEFAULT_GROUP_DISABLED_MESSAGE = "暂不支持群聊使用此功能，请到插�
 
 PATTERN_QUERY = r"^[/／]\s*人格查询\s*$"
 PATTERN_UPDATE = r"^[/／]\s*人格修改(?:\s+[\s\S]*)?$"
+PATTERN_OPTIMIZE = r"^[/／]\s*人格优化\s*$"
 PATTERN_HELP = r"^[/／]\s*人格帮助\s*$"
 
-#: 上面三条正则的编译版本，用于在回调里做「指令是否真的来自本人正文」的二次判定
+#: 上面几条正则的编译版本，用于在回调里做「指令是否真的来自本人正文」的二次判定
 QUERY_RE = re.compile(PATTERN_QUERY)
 UPDATE_RE = re.compile(PATTERN_UPDATE)
+OPTIMIZE_RE = re.compile(PATTERN_OPTIMIZE)
 HELP_RE = re.compile(PATTERN_HELP)
 
 #: 引用（回复）类消息段的类型名。
@@ -132,6 +139,12 @@ MAX_CATEGORY_TEXT_LENGTH = 4000
 DEFAULT_MAX_REQUIREMENT_LENGTH = 500
 
 MAX_FORWARD_TEXT_LENGTH = 3000
+
+#: 优化后总字数至少要保留原字数的这个比例，否则视为「疑似丢失了信息」而拒绝写入。
+#:
+#: 目的是挡住模型把人格内容大段删掉的情况（真优化通常只会砍冗余，不会砍到只剩两成）。
+#: 这是最后一道兜底，正常情况下根本不会触发。
+MIN_OPTIMIZE_KEEP_RATIO = 0.2
 
 
 # --------------------------------------------------------------------------------------
@@ -192,9 +205,13 @@ class ScopeConfig(PluginConfigBase):
         default=False,
         description="/人格查询 的群聊执行开关。关闭（默认）时该指令只在私聊生效；打开后白名单用户也可以在群聊里查询。",
     )
+    optimize_allow_group: bool = Field(
+        default=False,
+        description="/人格优化 的群聊执行开关。关闭（默认）时该指令只在私聊生效；打开后白名单用户也可以在群聊里优化人格。",
+    )
     query_group_disabled_message: str = Field(
         default=DEFAULT_GROUP_DISABLED_MESSAGE,
-        description="群聊执行开关关闭时，白名单用户在群聊发送 /人格查询 收到的提示。",
+        description="群聊执行开关关闭时，白名单用户在群聊发送 /人格查询 或 /人格优化 收到的提示。",
     )
     treat_unknown_scope_as_group: bool = Field(
         default=False,
@@ -266,6 +283,22 @@ class MessageConfig(PluginConfigBase):
     error_prefix: str = Field(
         default="人格热更新失败",
         description="出现技术性错误（模型失败、写文件失败等）时的提示前缀，后面会拼接具体原因。",
+    )
+
+    optimize_success_message: str = Field(
+        default="人格优化成功",
+        description="/人格优化 成功写入后的提示。",
+    )
+    optimize_failure_message: str = Field(
+        default="人格优化失败",
+        description=(
+            "/人格优化 失败时的提示。失败包括：模型全部不可用、模型输出解析不了、"
+            "优化后反而没有变短、以及内容疑似被大段删除。具体原因记在插件日志里。"
+        ),
+    )
+    optimize_nochange_message: str = Field(
+        default="人格已足够精简，无需优化",
+        description="/人格优化 跑完模型，但改写结果与原文一致（没有可优化的地方）时的提示。",
     )
 
 
@@ -344,6 +377,39 @@ CLASSIFY_SYSTEM_PROMPT = """你是 MaiBot（麦麦）的人设配置管家。麦
 - items 里 category 只能是 personality / behavior_style / reply_style 三个值之一，每个分类最多出现一次。
 - new_text 必须是可以直接替换原来那一整段的完整文本。
 - matched 为 true 但 items 为空，等同于不匹配。
+"""
+
+
+OPTIMIZE_SYSTEM_PROMPT = """你是 MaiBot（麦麦）的人设配置管家。麦麦的人格被拆成三个互不重叠的分类：
+
+1. personality（人设）—— 她是什么样的人。身份、性格、知识背景、态度、好恶。回答"她是谁"。
+2. behavior_style（行为风格）—— 什么时候说话、什么时候不说话、观察什么、什么话题接不接。回答"什么时候开口、什么时候闭嘴"。只写祈使式的行动准则。
+3. reply_style（表达风格）—— 怎么说话、说什么样的话。句子长短、语气、用词偏好、禁止的措辞、举例方式。回答"怎么说话"。
+
+现在给你当前这三段原文。你要做两件事：
+
+【第一件：重新归类】
+三段内容可能被归错了类（例如把"怎么说话"的规则写进了人设，"什么时候说话"写进了表达风格）。
+请按上面的定义，把每一段里的**每条信息**重新放回它真正该在的分类。
+归类时以"这条信息回答的是哪个问题"为准，不要因为原文放在哪一段就跟着放。
+
+【第二件：压缩精简】
+在**完整保留原有语义**的前提下，把文字改写得尽量短。
+- 只删冗余：重复的说法、铺垫、举例说明、客套话、同义反复。
+- 保留全部**事实性信息与风格约束**：身份设定、性格倾向、态度、什么时候说话/不说话、语气与用词规则、禁止事项，一条都不能丢。
+- 不要为了变短而合并掉不同的约束，也不要把具体规则抽象成空话。
+- 人设段建议控制在 200 字以内；三段合起来应当明显短于原文。
+- 不得新增原文没有依据的内容。
+
+只输出 JSON，不要输出任何解释、前后缀或代码块标记：
+
+{"personality": "重分类并压缩后的完整人设文本", "behavior_style": "重分类并压缩后的完整行为风格文本", "reply_style": "重分类并压缩后的完整表达风格文本", "notes": "一句话说明你调整了什么（可选）"}
+
+硬性约束：
+- 四个键都要有；三个分类的值都必须是**字符串**（该分类确实没有内容时给空字符串 ""）。
+- 值必须是完整的整段文本，可以直接替换原来那一整段，不要输出 diff 或片段。
+- 三个分类的值不能同时为空。
+- 宁可保守少删，也不要丢失信息。
 """
 
 
@@ -511,7 +577,7 @@ class QQPersonaManagerPlugin(MaiBotPlugin):
         path = self._find_config_path()
         if path is None:
             self.ctx.logger.warning(
-                "没有自动定位到 config/bot_config.toml，/人格修改 会不可用。"
+                "没有自动定位到 config/bot_config.toml，/人格修改 与 /人格优化 会不可用。"
                 "可在插件配置的「运行行为 → config_path」里手动填写绝对路径。"
             )
         else:
@@ -691,6 +757,104 @@ class QQPersonaManagerPlugin(MaiBotPlugin):
         return True, "人格已热更新成功", 2
 
     @Command(
+        "persona_optimize",
+        description="重新分类并压缩麦麦的人设 / 行为风格 / 表达风格，保持语义不变",
+        pattern=PATTERN_OPTIMIZE,
+        aliases=["/人格优化"],
+    )
+    async def handle_optimize(self, stream_id: str = "", **kwargs: Any):
+        """/人格优化：模型重新分类 + 压缩三段人格 -> 写回配置。"""
+
+        config = self._conf()
+        if not config.behavior.enabled:
+            return False, "插件未启用", 2
+
+        if config.behavior.ignore_quoted_commands and self._is_quoted_command_only(kwargs, OPTIMIZE_RE):
+            self.ctx.logger.info("忽略引用消息里携带的 /人格优化（非本人正文）")
+            return True, "已忽略引用消息中的指令", 2
+
+        allowed, user_id = await self._check_permission(stream_id, kwargs)
+        if not allowed:
+            return True, f"无权限（user_id={user_id or '未知'}）", 2
+
+        if not await self._check_optimize_scope(stream_id, kwargs):
+            return True, "群聊执行开关未打开", 2
+
+        try:
+            current = await self._read_current_persona()
+        except Exception as exc:
+            self.ctx.logger.error("读取当前人格失败：%s", exc, exc_info=True)
+            await self._reply(stream_id, config.message.optimize_failure_message)
+            return False, "读取人格失败", 2
+
+        if not any((current.get(category) or "").strip() for category in CATEGORY_ORDER):
+            self.ctx.logger.info("当前三段人格都是空的，没有可优化的内容。")
+            await self._reply(stream_id, config.message.optimize_failure_message)
+            return True, "没有可优化的人格内容", 2
+
+        self.ctx.logger.info("收到人格优化请求（来源 user_id=%s）", user_id or "未知")
+
+        optimized = await self._optimize_persona(current)
+        if optimized is None:
+            await self._reply(stream_id, config.message.optimize_failure_message)
+            return False, "模型调用失败或返回无法解析", 2
+
+        original_total = sum(len(current.get(category) or "") for category in CATEGORY_ORDER)
+        new_total = sum(len(optimized.get(category) or "") for category in CATEGORY_ORDER)
+
+        failures: list[str] = []
+        if new_total <= 0:
+            failures.append("优化后三段全为空")
+        elif new_total > original_total:
+            failures.append(f"优化后反而变长（{original_total} -> {new_total} 字）")
+        elif original_total and new_total < original_total * MIN_OPTIMIZE_KEEP_RATIO:
+            failures.append(f"优化后只剩 {new_total}/{original_total} 字，疑似丢失信息，已拒绝写入")
+
+        if failures:
+            self.ctx.logger.warning("人格优化结果未通过校验：%s", "；".join(failures))
+            await self._reply(stream_id, config.message.optimize_failure_message)
+            return True, "优化结果未通过校验", 2
+
+        updates: dict[str, str] = {}
+        for category in CATEGORY_ORDER:
+            new_text = optimized.get(category) or ""
+            if new_text == (current.get(category) or ""):
+                continue
+            updates[CATEGORY_FIELDS[category]] = new_text
+
+        if not updates:
+            self.ctx.logger.info("模型给出的优化结果与原文一致，没有可改动的地方。")
+            await self._reply(stream_id, config.message.optimize_nochange_message)
+            return True, "无需优化", 2
+
+        if config.behavior.dry_run:
+            preview = "\n".join(
+                f"[{field}] {updates[field]}" for field in CATEGORY_ORDER if CATEGORY_FIELDS[field] in updates
+            )
+            await self._reply(stream_id, f"（演练模式，未写入配置）\n{preview}")
+            return True, "演练模式", 2
+
+        try:
+            async with self._write_lock:
+                await asyncio.to_thread(self._write_personality, updates)
+        except Exception as exc:
+            self.ctx.logger.error("写入 bot_config.toml 失败：%s", exc, exc_info=True)
+            await self._reply(stream_id, config.message.optimize_failure_message)
+            return False, "写入配置失败", 2
+
+        saved = original_total - new_total
+        ratio = (saved / original_total * 100) if original_total else 0.0
+        self.ctx.logger.info(
+            "人格优化完成：%d -> %d 字（省 %.1f%%），字段：%s",
+            original_total,
+            new_total,
+            ratio,
+            ", ".join(updates),
+        )
+        await self._reply(stream_id, config.message.optimize_success_message)
+        return True, "人格优化成功", 2
+
+    @Command(
         "persona_help",
         description="查看 QQ 人格管理插件的可用指令",
         pattern=PATTERN_HELP,
@@ -715,6 +879,7 @@ class QQPersonaManagerPlugin(MaiBotPlugin):
             "/人格修改 需求 —— 按需求热更新人格\n"
             "  例：/人格修改 说话加上喵~\n"
             "  例：/人格修改 晚上 11 点以后就别发言了\n"
+            "/人格优化 —— 重新分类并压缩三段人格，保持语义不变（减少 token 开销）\n"
             "/人格帮助 —— 显示这条说明"
         )
         await self._reply(stream_id, help_text)
@@ -849,20 +1014,39 @@ class QQPersonaManagerPlugin(MaiBotPlugin):
         self.ctx.logger.warning("无法判断消息场景（stream_id=%s），按配置回退为 %s。", stream_id, scope)
         return scope
 
-    async def _check_query_scope(self, stream_id: str, kwargs: dict[str, Any]) -> bool:
-        """检查 /人格查询 是否允许在当前场景使用。"""
+    async def _check_group_scope(self, stream_id: str, kwargs: dict[str, Any], *, allowed: bool, command: str) -> bool:
+        """群聊执行开关的统一判定。开关没打开且当前是群聊 -> 回提示并拒绝。"""
 
-        config = self._conf()
-        if config.scope.query_allow_group:
+        if allowed:
             return True
 
         scope = await self._resolve_scope(kwargs)
         if scope != SCOPE_GROUP:
             return True
 
-        self.ctx.logger.info("群聊执行开关未打开，拒绝群聊里的 /人格查询（stream_id=%s）", stream_id)
-        await self._reply(stream_id, config.scope.query_group_disabled_message)
+        self.ctx.logger.info("群聊执行开关未打开，拒绝群聊里的 %s（stream_id=%s）", command, stream_id)
+        await self._reply(stream_id, self._conf().scope.query_group_disabled_message)
         return False
+
+    async def _check_query_scope(self, stream_id: str, kwargs: dict[str, Any]) -> bool:
+        """检查 /人格查询 是否允许在当前场景使用。"""
+
+        return await self._check_group_scope(
+            stream_id,
+            kwargs,
+            allowed=self._conf().scope.query_allow_group,
+            command="/人格查询",
+        )
+
+    async def _check_optimize_scope(self, stream_id: str, kwargs: dict[str, Any]) -> bool:
+        """检查 /人格优化 是否允许在当前场景使用。"""
+
+        return await self._check_group_scope(
+            stream_id,
+            kwargs,
+            allowed=self._conf().scope.optimize_allow_group,
+            command="/人格优化",
+        )
 
     # ---------------------------------------------------------------- 权限
 
@@ -1135,13 +1319,55 @@ class QQPersonaManagerPlugin(MaiBotPlugin):
             self.ctx.logger.warning("模型任务 %s 返回的 JSON 结构不合法，尝试下一个。", task_name)
         return None
 
+    async def _optimize_persona(self, current: dict[str, str]) -> dict[str, str] | None:
+        """让模型重新分类 + 压缩三段人格，保持语义不变。
+
+        Returns:
+            None 表示模型全部不可用或输出结构不合法；
+            否则返回 {"personality": str, "behavior_style": str, "reply_style": str}。
+        """
+
+        config = self._conf()
+        user_payload = json.dumps(
+            {
+                "current": {
+                    "personality": current.get("personality", ""),
+                    "behavior_style": current.get("behavior_style", ""),
+                    "reply_style": current.get("reply_style", ""),
+                },
+                "goal": "重新分类 + 压缩精简，语义不变",
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+
+        tasks = [str(task).strip() for task in (config.model.task_priority or []) if str(task).strip()]
+        if not tasks:
+            tasks = ["replyer", "planner"]
+
+        for task_name in tasks:
+            parsed = await self._call_model(
+                task_name, user_payload, config, system_prompt=OPTIMIZE_SYSTEM_PROMPT
+            )
+            if parsed is None:
+                continue
+            optimized = self._normalize_optimization(parsed)
+            if optimized is not None:
+                return optimized
+            self.ctx.logger.warning("模型任务 %s 返回的优化 JSON 结构不合法，尝试下一个。", task_name)
+        return None
+
     async def _call_model(
-        self, task_name: str, user_payload: str, config: PersonaManagerConfig
+        self,
+        task_name: str,
+        user_payload: str,
+        config: PersonaManagerConfig,
+        system_prompt: str = CLASSIFY_SYSTEM_PROMPT,
     ) -> dict[str, Any] | None:
         """调用一次模型；失败返回 None。"""
 
         prompt = [
-            {"role": "system", "content": CLASSIFY_SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_payload},
         ]
         try:
@@ -1220,6 +1446,40 @@ class QQPersonaManagerPlugin(MaiBotPlugin):
         if matched_flag is False or not items:
             return {"matched": False, "reason": str(parsed.get("reason") or "").strip(), "items": []}
         return {"matched": True, "reason": str(parsed.get("reason") or "").strip(), "items": items}
+
+    def _normalize_optimization(self, parsed: dict[str, Any]) -> dict[str, str] | None:
+        """校验并规范化 /人格优化 的模型输出。
+
+        模型可能返回 {"personality": ..., "behavior_style": ..., "reply_style": ...}，
+        也可能把键写成下划线以外的形态，这里统一按分类取，取不到就当空字符串。
+
+        Returns:
+            None 表示结构不合法（不是 dict、某段超长、三段全空）；
+            否则返回 {category: text}。
+        """
+
+        if not isinstance(parsed, dict):
+            return None
+
+        result: dict[str, str] = {}
+        for category in CATEGORY_ORDER:
+            field = CATEGORY_FIELDS[category]
+            value = parsed.get(category)
+            if value is None:
+                value = parsed.get(field)
+            if isinstance(value, list):
+                value = "".join(str(item) for item in value)
+            if not isinstance(value, str):
+                value = ""
+            text = _strip_control_chars(value).strip()
+            if len(text) > MAX_CATEGORY_TEXT_LENGTH:
+                self.ctx.logger.warning("优化结果的 %s 段超长（%d 字），视为不合法。", field, len(text))
+                return None
+            result[category] = text
+
+        if not any(result.values()):
+            return None
+        return result
 
     # ---------------------------------------------------------------- 配置文件
 

@@ -8,6 +8,7 @@ notify_on_deny = true
 
 [scope]
 query_allow_group = false
+optimize_allow_group = false
 query_group_disabled_message = "暂不支持群聊使用此功能，请到插件页开启此功能群聊执行开关"
 treat_unknown_scope_as_group = false
 
@@ -29,6 +30,9 @@ need_requirement_message = "请在指令后面带上修改需求"
 success_message = "人格已热更新成功"
 mismatch_message = "人格热更新失败，当前需求不匹配"
 error_prefix = "人格热更新失败"
+optimize_success_message = "人格优化成功"
+optimize_failure_message = "人格优化失败"
+optimize_nochange_message = "人格已足够精简，无需优化"
 
 [behavior]
 enabled = true
