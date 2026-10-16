@@ -1,5 +1,25 @@
 # 更新日志
 
+## 1.7.0
+
+### 变更
+
+- **适配 MaiBot 官方插件中心（Plugin Registry）提交规范**，补齐 `_manifest.json` 元信息：
+  - 新增 `urls.homepage`、`urls.issues`，并把 `urls.documentation` 指向本仓库 README；
+  - 新增 `display.icon`（lucide 图标 `user-cog`，兜底 `users`，背景色 `#5B8DEF`）；
+  - `i18n` 补充 `supported_locales`。
+
+- **插件 ID 调整**：`local.qq-persona-manager` → `zhengyz233.qq-persona-manager`。
+  提交前的最后窗口期，统一为社区主流的「作者名.插件名」命名；`local.` 前缀通常表示本地/分支插件，
+  不适合公开收录。收录后 ID 不可再变，故一次性改到位。
+
+### 说明
+
+- **指令、配置项、行为逻辑与 1.6.0 完全一致**，本次仅元信息与 ID 变化，无需改配置。
+- ID 变更后，MaiBot 为插件分配的持久化目录名会从 `data/plugins/local.qq-persona-manager/`
+  变为 `data/plugins/zhengyz233.qq-persona-manager/`。若想保留历史备份（`backups/`），
+  把旧目录整体改名/移动过去即可；不迁移也不影响功能，只是旧备份不再出现在回滚列表。
+
 ## 1.6.0
 
 ### 新增

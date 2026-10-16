@@ -257,7 +257,7 @@ optimize_allow_group = false   # false（默认）= 只有私聊能优化；true
 「人格已足够精简，无需优化」，不会白写一次文件 —— 这不算失败。
 
 > 每次优化前都会自动备份（和 `/人格修改` 共用同一套备份），想回滚随时可以从
-> `data/plugins/local.qq-persona-manager/backups/` 里挑一个恢复。
+> `data/plugins/zhengyz233.qq-persona-manager/backups/` 里挑一个恢复。
 >
 > `[behavior] dry_run` 演练模式对它同样有效：只把结果发出来给你看，不写配置。
 
@@ -342,7 +342,7 @@ WebUI 里能改，也可以直接编辑 `plugins/qq-persona-manager/config.toml`
 - 写盘前会用 `tomllib` 做两道校验：① 整个文件语法能解析；② 目标字段确实变成了新值。**任何一道不过就中止，不会把配置写坏。**
 - `/人格优化` 用的是另一套系统提示词：先按「谁 / 什么时候说话 / 怎么说话」重新归类，再在保留全部语义的前提下压缩。
   它对模型输出还有三道额外闸门（三段不能全空、总字数必须变短、不能只剩两成以下），**任一不过就不写盘**。
-- 写盘前先把原文件备份到 `data/plugins/local.qq-persona-manager/backups/`。
+- 写盘前先把原文件备份到 `data/plugins/zhengyz233.qq-persona-manager/backups/`。
 - **指令为什么要在入口做二次判定**：MaiBot 生成待匹配文本时会遍历所有消息组件，
   其中引用组件会把**被引用消息的正文原样拼到最前面**；而指令匹配除正则外还有一条
   `text.startswith(别名)` 的通路，没有结尾约束。所以「引用一条指令」会被当成本人发指令。
@@ -374,7 +374,7 @@ WebUI 里能改，也可以直接编辑 `plugins/qq-persona-manager/config.toml`
 | `/人格修改` 回复"模型调用失败" | `replyer` 和 `planner` 都没配可用模型，或都超时了。去 `model_config.toml` 检查 |
 | `/人格修改` 回复"不匹配"但你觉得该匹配 | 需求写具体点，比如把"改改说话方式"换成"说话句尾加喵~"。临时把模型的 `temperature` 调到 0.1 会更稳 |
 | 改完感觉没变化 | 人设只影响新回复，多聊几轮；确认日志里出现了"配置重载成功" |
-| 想回滚 | 从 `data/plugins/local.qq-persona-manager/backups/` 里挑一个 `bot_config.<时间戳>.toml`，改回 `config/bot_config.toml` |
+| 想回滚 | 从 `data/plugins/zhengyz233.qq-persona-manager/backups/` 里挑一个 `bot_config.<时间戳>.toml`，改回 `config/bot_config.toml` |
 
 ---
 
@@ -383,4 +383,4 @@ WebUI 里能改，也可以直接编辑 `plugins/qq-persona-manager/config.toml`
 - 插件会**写你 MaiBot 的配置文件**。`backup` 默认开着，请别关。
 - 第一次用建议先打开 `dry_run`，看几轮判定结果对不对，再关掉正式用。
 - 白名单请只加你信得过的人 —— 拿到权限的人可以任意改写麦麦的人格。
-- 备份目录：`MaiBot/data/plugins/local.qq-persona-manager/backups/`
+- 备份目录：`MaiBot/data/plugins/zhengyz233.qq-persona-manager/backups/`
