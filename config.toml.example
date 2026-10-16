@@ -24,6 +24,7 @@ timeout_seconds = 120.0
 cat_personality = "#人设"
 cat_behavior_style = "#行为风格"
 cat_reply_style = "#表达风格"
+label_in_content = true
 need_requirement_message = "请在指令后面带上修改需求"
 success_message = "人格已热更新成功"
 mismatch_message = "人格热更新失败，当前需求不匹配"

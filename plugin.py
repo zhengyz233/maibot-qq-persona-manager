@@ -237,9 +237,19 @@ class MessageConfig(PluginConfigBase):
     __ui_icon__ = "message-square"
     __ui_order__ = 4
 
-    cat_personality: str = Field(default="#人设", description="第一段的标题。")
-    cat_behavior_style: str = Field(default="#行为风格", description="第二段的标题。")
-    cat_reply_style: str = Field(default="#表达风格", description="第三段的标题。")
+    cat_personality: str = Field(default="#人设", description="人设段的标题，也是这段正文最前面的那行标签。")
+    cat_behavior_style: str = Field(default="#行为风格", description="行为风格段的标题，也是这段正文最前面的那行标签。")
+    cat_reply_style: str = Field(default="#表达风格", description="表达风格段的标题，也是这段正文最前面的那行标签。")
+
+    label_in_content: bool = Field(
+        default=True,
+        description=(
+            "把分类标题写在每段正文的最前面（标题独占一行，下面接正文）。"
+            "合并转发的节点发送者名字常被适配器换成账号昵称，标签只写在名字上往往看不到，"
+            "所以默认开启 —— 一眼就能分清哪段是人设、哪段是行为风格、哪段是表达风格。"
+            "关闭后只在合并转发的发送者名字上显示标签。"
+        ),
+    )
 
     need_requirement_message: str = Field(
         default="请在指令后面带上修改需求",
@@ -558,9 +568,9 @@ class QQPersonaManagerPlugin(MaiBotPlugin):
             return False, "读取人格失败", 2
 
         labels = (
-            self._conf().message.cat_personality,
-            self._conf().message.cat_behavior_style,
-            self._conf().message.cat_reply_style,
+            config.message.cat_personality,
+            config.message.cat_behavior_style,
+            config.message.cat_reply_style,
         )
         texts = (
             current["personality"] or "（当前未设置）",
@@ -568,11 +578,22 @@ class QQPersonaManagerPlugin(MaiBotPlugin):
             current["reply_style"] or "（当前未设置）",
         )
 
+        def render(label: str, text: str) -> str:
+            """生成单段正文。
+
+            合并转发的节点"发送者名字"在多数 QQ 适配器上会被渲染成账号昵称，
+            而不是我们传进去的 nickname，所以标签只写在名字上等于没写。
+            默认把分类标签顶在正文最前面，一眼就能分清哪段是哪类。
+            """
+
+            body = f"{label}\n{text}" if config.message.label_in_content else text
+            return self._clip(body, MAX_FORWARD_TEXT_LENGTH)
+
         nodes = [
             {
                 "user_id": "0",
                 "nickname": label,
-                "segments": [{"type": "text", "content": self._clip(text, MAX_FORWARD_TEXT_LENGTH)}],
+                "segments": [{"type": "text", "content": render(label, text)}],
             }
             for label, text in zip(labels, texts, strict=True)
         ]
@@ -580,10 +601,7 @@ class QQPersonaManagerPlugin(MaiBotPlugin):
         sent = await self.ctx.send.forward(nodes, stream_id)
         if not sent:
             self.ctx.logger.warning("合并转发发送失败，退回普通文本发送。")
-            plain = "\n\n".join(
-                f"{label}\n{self._clip(text, MAX_FORWARD_TEXT_LENGTH)}"
-                for label, text in zip(labels, texts, strict=True)
-            )
+            plain = "\n\n".join(render(label, text) for label, text in zip(labels, texts, strict=True))
             sent = await self.ctx.send.text(plain, stream_id)
 
         if not sent:
