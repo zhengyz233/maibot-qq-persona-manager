@@ -115,12 +115,33 @@ MAX_FORWARD_TEXT_LENGTH = 3000
 # --------------------------------------------------------------------------------------
 
 
+class PluginSection(PluginConfigBase):
+    """插件基础信息。
+
+    MaiBot 的插件配置强制要求存在 ``[plugin]`` 段并提供 ``plugin.config_version``。
+    默认配置由配置模型直接 `model_dump` 生成，SDK 不会自动补这一节，
+    因此必须在这里显式声明，否则加载时会报「缺少 [plugin] 配置节」。
+    """
+
+    __ui_label__ = "插件信息"
+    __ui_icon__ = "package"
+    __ui_order__ = 0
+
+    config_version: str = Field(
+        default="1.0.0",
+        description=(
+            "配置结构版本号，MaiBot 依据它判断配置是否需要迁移。"
+            "由插件维护，平时不需要改动；留空会导致配置校验失败。"
+        ),
+    )
+
+
 class AccessConfig(PluginConfigBase):
     """白名单与权限。"""
 
     __ui_label__ = "白名单"
     __ui_icon__ = "shield"
-    __ui_order__ = 0
+    __ui_order__ = 1
 
     whitelist: list[str] = Field(
         default_factory=list,
@@ -141,7 +162,7 @@ class ScopeConfig(PluginConfigBase):
 
     __ui_label__ = "限用范围"
     __ui_icon__ = "users"
-    __ui_order__ = 1
+    __ui_order__ = 2
 
     query_allow_group: bool = Field(
         default=False,
@@ -165,7 +186,7 @@ class ModelConfig(PluginConfigBase):
 
     __ui_label__ = "模型"
     __ui_icon__ = "cpu"
-    __ui_order__ = 2
+    __ui_order__ = 3
 
     task_priority: list[str] = Field(
         default_factory=lambda: ["replyer", "planner"],
@@ -190,7 +211,7 @@ class MessageConfig(PluginConfigBase):
 
     __ui_label__ = "文案"
     __ui_icon__ = "message-square"
-    __ui_order__ = 3
+    __ui_order__ = 4
 
     cat_personality: str = Field(default="#人设", description="第一段的标题。")
     cat_behavior_style: str = Field(default="#行为风格", description="第二段的标题。")
@@ -219,7 +240,7 @@ class BehaviorConfig(PluginConfigBase):
 
     __ui_label__ = "运行行为"
     __ui_icon__ = "sliders"
-    __ui_order__ = 4
+    __ui_order__ = 5
 
     enabled: bool = Field(default=True, description="插件总开关。")
     dry_run: bool = Field(
@@ -240,6 +261,9 @@ class BehaviorConfig(PluginConfigBase):
 
 class PersonaManagerConfig(PluginConfigBase):
     """QQ 人格管理插件配置。"""
+
+    #: 必须有：MaiBot 强制要求 [plugin] 段提供 config_version，用于配置迁移。
+    plugin: PluginSection = Field(default_factory=PluginSection)
 
     access: AccessConfig = Field(default_factory=AccessConfig)
     scope: ScopeConfig = Field(default_factory=ScopeConfig)

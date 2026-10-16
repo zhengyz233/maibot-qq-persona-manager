@@ -75,15 +75,25 @@ MaiBot/
 3. 打开 **白名单** 卡片，在 `whitelist` 里把你的 QQ 号加进去，保存
 
 **方式 B（直接改文件）**
-插件第一次加载后会自动生成 `plugins/qq-persona-manager/config.toml`，用记事本打开，改成：
+
+插件第一次加载后会自动生成 `plugins/qq-persona-manager/config.toml`。仓库里的
+`config.toml.example` 就是它的完整内容 —— 如果你的 `config.toml` 缺失或损坏，
+把它复制过去、改名为 `config.toml` 即可。
+
+用记事本打开，改成（**请整体保留 `[plugin]` 段**）：
 
 ```toml
+[plugin]
+config_version = "1.0.0"        # 必须存在且不能为空，否则插件会加载失败
+
 [access]
 whitelist = ["123456789", "987654321"]
 deny_message = "您无权进行此类操作"
 notify_on_deny = true
 ```
 
+- ⚠️ `[plugin]` 段是 MaiBot 的**硬性要求**，`config_version` 留空或删掉会导致
+  插件页报「缺少 `[plugin]` 配置节」并暂停插件功能，详见下方「出问题了？」。
 - `whitelist`：能使用指令的 QQ 号，**写纯数字或用 `qq:123456789` 都行**，多个用英文逗号隔开
 - **白名单为空时，所有人都会被拒绝**（这是故意的安全设计）
 
@@ -107,6 +117,13 @@ model_list = ["你的模型名"]
 ```
 
 收到指令说明就说明插件跑通了。
+
+### 以后怎么升级
+
+- **git 安装的**：进 `plugins/qq-persona-manager/` 执行 `git pull`，然后在 WebUI 插件页点重载。
+- **手动复制安装的**：重新下载新版，用新的 `plugin.py` 和 `_manifest.json` 覆盖旧的即可。
+  **别删 `config.toml`**（里面是你的白名单和配置）。
+- 升级后若插件页报配置缺少 `[plugin]` 段，按「六、出问题了？」里第一条处理。
 
 ---
 
@@ -190,6 +207,15 @@ query_allow_group = true    # false（默认）= 只有私聊能用；true = 群
 ## 四、插件配置项说明
 
 WebUI 里能改，也可以直接编辑 `plugins/qq-persona-manager/config.toml`。
+完整默认内容见仓库里的 [`config.toml.example`](./config.toml.example)。
+
+### `[plugin]` 插件信息
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `config_version` | `"1.0.0"` | **配置结构版本号**，MaiBot 用它判断配置是否需要迁移。**必须存在且不能为空**，否则插件加载失败。由插件维护，平时不用改 |
+
+> 这个版本号跟插件版本（`_manifest.json` 里的 `version`）是两回事，不用跟着插件升级而改。
 
 ### `[access]` 白名单与权限
 
@@ -249,6 +275,7 @@ WebUI 里能改，也可以直接编辑 `plugins/qq-persona-manager/config.toml`
 
 | 现象 | 原因 & 处理 |
 |---|---|
+| 插件页报「插件配置文件缺少 `[plugin]` 配置节，且必须提供 `plugin.config_version` 版本号」，提示"配置错误，业务暂停" | `config.toml` 缺少 `[plugin]` 段。**① 最简单**：把仓库里的 `config.toml.example` 复制过去、改名为 `config.toml` 覆盖；**② 手动**：在文件**最前面**补上这两行 `[plugin]` 和 `config_version = "1.0.0"`，保存。⚠️ 注意：只要文件里**有内容却缺这一段**，校验就会失败；文件整个为空反而会被自动补全。补好后插件会自动恢复运行 |
 | 发指令完全没反应 | ① 白名单没填 → 所有人被拒（但这时应该会收到"您无权…"，如果连这个都没有就往下看）；② 插件没加载，去 WebUI 插件页看状态；③ 指令必须**以 `/` 开头**且单独成句 |
 | 提示"没有权限"（英文/系统口吻） | 这是 MaiBot 主程序的权限提示，不是本插件的。本插件的提示是中文"您无权进行此类操作"。检查是否和别的插件命令名撞了 |
 | 插件加载失败 | 看 MaiBot 日志。常见：`manifest_version` 不是 2、`maibot_sdk` 没装、MaiBot 版本低于 1.3.0 |

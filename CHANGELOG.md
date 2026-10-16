@@ -1,5 +1,32 @@
 # 更新日志
 
+## 1.2.0
+
+### 修复
+
+- **修复插件加载后配置校验失败**：MaiBot 的插件配置强制要求 `config.toml` 存在
+  `[plugin]` 段并提供 `plugin.config_version`，缺失时会在插件页报
+  「插件配置文件缺少 `[plugin]` 配置节，且必须提供 `plugin.config_version` 版本号」，
+  并暂停插件全部工具与调度。原因是默认配置由配置模型直接 `model_dump` 生成、
+  SDK 不会自动补这一节，而本插件此前没有声明 `plugin` 字段。
+  现已在配置模型中显式声明 `PluginSection`，默认 `config_version = "1.0.0"`。
+- 修复后，**空的 `config.toml` 会被自动补全为完整默认配置**，不再需要手工创建。
+
+### 新增
+
+- 新增 `[plugin]` 配置段（WebUI 显示为「插件信息」，排在最前）。
+- 新增 `config.toml.example`，可整体复制成 `config.toml` 直接使用；
+  也适用于旧版本升级时忘记改名导致配置缺失的情况。
+- 其余五个配置段的 WebUI 显示顺序顺延（`__ui_order__` 0→1 … 4→5），
+  保证「插件信息」排在第一位。
+
+### 说明
+
+- `plugin.config_version` 是**配置结构版本**，与插件版本号相互独立，用于 MaiBot
+  在后续版本变更配置结构时执行迁移，平时不需要改动。
+- ⚠️ 升级提醒：`config.toml` 里若**已有内容但缺少 `[plugin]` 段**，校验仍会失败。
+  这种情况请用 `config.toml.example` 覆盖，或把 `[plugin]` 段补到文件最前面。
+
 ## 1.1.0
 
 ### 新增
