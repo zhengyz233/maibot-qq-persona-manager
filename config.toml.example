@@ -32,6 +32,7 @@ error_prefix = "人格热更新失败"
 [behavior]
 enabled = true
 dry_run = false
+ignore_quoted_commands = true
 backup = true
 backup_keep = 20
 config_path = ""

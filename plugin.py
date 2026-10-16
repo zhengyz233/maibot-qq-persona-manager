@@ -98,6 +98,30 @@ PATTERN_QUERY = r"^[/／]\s*人格查询\s*$"
 PATTERN_UPDATE = r"^[/／]\s*人格修改(?:\s+[\s\S]*)?$"
 PATTERN_HELP = r"^[/／]\s*人格帮助\s*$"
 
+#: 上面三条正则的编译版本，用于在回调里做「指令是否真的来自本人正文」的二次判定
+QUERY_RE = re.compile(PATTERN_QUERY)
+UPDATE_RE = re.compile(PATTERN_UPDATE)
+HELP_RE = re.compile(PATTERN_HELP)
+
+#: 引用（回复）类消息段的类型名。
+#:
+#: ⚠️ 这类段携带的是「被引用消息的原文」，而 MaiBot 在
+#: ``SessionMessage.process()`` 里会把 ReplyComponent 的正文**原样**拼进
+#: ``processed_plain_text`` 的最前面（``process_reply_component`` 直接
+#: ``return component.target_message_content``，没有任何包裹），随后
+#: ``find_command_by_text`` 又用不带结尾约束的 ``text.startswith(alias)``
+#: 做别名匹配 —— 于是「别人引用你发过的指令消息」会被误判成他本人在发指令。
+#: 插件无法修改宿主行为，只能在这里做二次判定把它拦掉。
+QUOTE_SEGMENT_TYPES = frozenset(
+    {
+        "reply",
+        "quote",
+        "reference",
+        "reply_message",
+        "quote_message",
+    }
+)
+
 #: 从消息原文里抠出"人格修改"后面的需求
 REQUIREMENT_RE = re.compile(r"^[/／]\s*人格修改\s*(?P<requirement>[\s\S]*)$")
 
@@ -246,6 +270,14 @@ class BehaviorConfig(PluginConfigBase):
     dry_run: bool = Field(
         default=False,
         description="演练模式。打开后只把模型判定结果发到聊天流，不写入配置文件。建议先开一次确认效果。",
+    )
+    ignore_quoted_commands: bool = Field(
+        default=True,
+        description=(
+            "忽略「引用消息」里携带的指令（推荐保持开启）。"
+            "开启后，别人引用你发过的 /人格查询 或 /人格修改 不会再次触发本插件；"
+            "本人正常发送指令不受影响。关闭后回到旧行为。"
+        ),
     )
     backup: bool = Field(default=True, description="写入前备份 bot_config.toml。强烈建议保持开启。")
     backup_keep: int = Field(default=20, description="最多保留多少个备份文件。")
@@ -502,8 +534,14 @@ class QQPersonaManagerPlugin(MaiBotPlugin):
     async def handle_query(self, stream_id: str = "", **kwargs: Any):
         """/人格查询：三段式合并转发。"""
 
-        if not self._conf().behavior.enabled:
+        config = self._conf()
+
+        if not config.behavior.enabled:
             return False, "插件未启用", 2
+
+        if config.behavior.ignore_quoted_commands and self._is_quoted_command_only(kwargs, QUERY_RE):
+            self.ctx.logger.info("忽略引用消息里携带的 /人格查询（非本人正文）")
+            return True, "已忽略引用消息中的指令", 2
 
         allowed, user_id = await self._check_permission(stream_id, kwargs)
         if not allowed:
@@ -564,6 +602,10 @@ class QQPersonaManagerPlugin(MaiBotPlugin):
         config = self._conf()
         if not config.behavior.enabled:
             return False, "插件未启用", 2
+
+        if config.behavior.ignore_quoted_commands and self._is_quoted_command_only(kwargs, UPDATE_RE):
+            self.ctx.logger.info("忽略引用消息里携带的 /人格修改（非本人正文）")
+            return True, "已忽略引用消息中的指令", 2
 
         allowed, user_id = await self._check_permission(stream_id, kwargs)
         if not allowed:
@@ -638,6 +680,12 @@ class QQPersonaManagerPlugin(MaiBotPlugin):
     )
     async def handle_help(self, stream_id: str = "", **kwargs: Any):
         """/人格帮助：列出可用指令。"""
+
+        config = self._conf()
+
+        if config.behavior.ignore_quoted_commands and self._is_quoted_command_only(kwargs, HELP_RE):
+            self.ctx.logger.info("忽略引用消息里携带的 /人格帮助（非本人正文）")
+            return True, "已忽略引用消息中的指令", 2
 
         allowed, _ = await self._check_permission(stream_id, kwargs)
         if not allowed:
@@ -865,6 +913,59 @@ class QQPersonaManagerPlugin(MaiBotPlugin):
             if picked:
                 return picked
         return ""
+
+    # ---------------------------------------------------------------- 引用消息防护
+
+    @staticmethod
+    def _collect_segments(kwargs: dict[str, Any]) -> list[Any]:
+        """尽量从回调参数里收集本消息的段列表；取不到就返回空列表。"""
+
+        candidates: list[Any] = [kwargs.get("raw_message")]
+        message = kwargs.get("message")
+        if isinstance(message, dict):
+            candidates.append(message.get("raw_message"))
+            candidates.append(message.get("message_segments"))
+        elif isinstance(message, list):
+            candidates.append(message)
+        for value in candidates:
+            if isinstance(value, list) and value:
+                return value
+        return []
+
+    @staticmethod
+    def _has_quote_segment(segments: list[Any]) -> bool:
+        """判断消息段里是否含有引用（回复）段。"""
+
+        for segment in segments:
+            if not isinstance(segment, dict):
+                continue
+            if str(segment.get("type") or "").strip().lower() in QUOTE_SEGMENT_TYPES:
+                return True
+        return False
+
+    @classmethod
+    def _is_quoted_command_only(cls, kwargs: dict[str, Any], pattern: "re.Pattern[str]") -> bool:
+        """判断本次调用是否只是「引用了一条指令消息」，而非本人真在发指令。
+
+        返回 True 表示应当忽略本次调用。原因见 ``QUOTE_SEGMENT_TYPES`` 的说明：
+        宿主会把被引用消息的原文拼到文本最前面，且别名匹配不带结尾约束，
+        于是「引用指令」会被误触发。这里用消息段做二次判定 ——
+        只要存在引用段，就要求指令必须出现在**非引用的正文**里才算数。
+
+        为避免误杀，以下情况一律放行（返回 False）：
+        - 拿不到任何消息段（宿主形态不同，宁可放行也不误伤正常使用）；
+        - 消息里没有引用段（本人正常发送指令）。
+        """
+
+        segments = cls._collect_segments(kwargs)
+        if not segments:
+            return False
+        if not cls._has_quote_segment(segments):
+            return False
+        own_text = _segments_to_text(segments).strip()
+        if not own_text:
+            return True
+        return pattern.fullmatch(own_text) is None
 
     @staticmethod
     def _raw_text(kwargs: dict[str, Any]) -> str:

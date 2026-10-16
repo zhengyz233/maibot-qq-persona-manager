@@ -252,6 +252,7 @@ WebUI 里能改，也可以直接编辑 `plugins/qq-persona-manager/config.toml`
 |---|---|---|
 | `enabled` | `true` | 插件总开关 |
 | `dry_run` | `false` | **演练模式**：打开后只把判定结果发到聊天流，**不写入配置文件**。第一次用建议先开一次看看效果 |
+| `ignore_quoted_commands` | `true` | **忽略「引用消息」里携带的指令**。开启后，别人引用你发过的 `/人格查询`、`/人格修改` 不会再次触发插件；本人正常发送不受影响。**建议保持开启** |
 | `backup` | `true` | 写入前备份 `bot_config.toml`，**强烈建议保持开启** |
 | `backup_keep` | `20` | 最多保留多少个备份 |
 | `config_path` | `""` | `bot_config.toml` 的绝对路径。留空自动定位，一般不用填 |
@@ -266,6 +267,11 @@ WebUI 里能改，也可以直接编辑 `plugins/qq-persona-manager/config.toml`
 - 改人格时用**文本级手术**：只替换 `[personality]` 段里 `personality` / `behavior_style` / `reply_style` 三个键的值，**其余内容、缩进、注释、别的段落一字不动**。
 - 写盘前会用 `tomllib` 做两道校验：① 整个文件语法能解析；② 目标字段确实变成了新值。**任何一道不过就中止，不会把配置写坏。**
 - 写盘前先把原文件备份到 `data/plugins/local.qq-persona-manager/backups/`。
+- **指令为什么要在入口做二次判定**：MaiBot 生成待匹配文本时会遍历所有消息组件，
+  其中引用组件会把**被引用消息的正文原样拼到最前面**；而指令匹配除正则外还有一条
+  `text.startswith(别名)` 的通路，没有结尾约束。所以「引用一条指令」会被当成本人发指令。
+  插件因此改为**看消息段**：存在引用段时，要求指令必须出现在非引用的正文里才算数
+  （对应配置 `ignore_quoted_commands`）。
 - MaiBot 用 `watchfiles` 监听 `config/bot_config.toml`，检测到变化后热重载人格配置 —— 所以改完立即生效，不用重启。
 - 判断消息来自群聊还是私聊时，先用消息对象里的 `message_info.group_info`（群聊才有）、`is_group_message` 等字段；万一这些都没有，就向宿主查聊天流列表，用 `stream_id` 反查 `chat_type`（结果缓存 5 分钟）。两层都拿不到才按 `treat_unknown_scope_as_group` 回退。
 
@@ -276,6 +282,7 @@ WebUI 里能改，也可以直接编辑 `plugins/qq-persona-manager/config.toml`
 | 现象 | 原因 & 处理 |
 |---|---|
 | 插件页报「插件配置文件缺少 `[plugin]` 配置节，且必须提供 `plugin.config_version` 版本号」，提示"配置错误，业务暂停" | `config.toml` 缺少 `[plugin]` 段。**① 最简单**：把仓库里的 `config.toml.example` 复制过去、改名为 `config.toml` 覆盖；**② 手动**：在文件**最前面**补上这两行 `[plugin]` 和 `config_version = "1.0.0"`，保存。⚠️ 注意：只要文件里**有内容却缺这一段**，校验就会失败；文件整个为空反而会被自动补全。补好后插件会自动恢复运行 |
+| 别人只是**引用了**我发过的指令，插件却被触发了 | v1.3.0 已修复。请确认插件版本 ≥ 1.3.0，并且 `[behavior] ignore_quoted_commands` 是 `true`（默认值就是）。原理：MaiBot 会把被引用消息的正文拼到待匹配文本最前面，插件只能在指令入口做二次判定把它拦掉 |
 | 发指令完全没反应 | ① 白名单没填 → 所有人被拒（但这时应该会收到"您无权…"，如果连这个都没有就往下看）；② 插件没加载，去 WebUI 插件页看状态；③ 指令必须**以 `/` 开头**且单独成句 |
 | 提示"没有权限"（英文/系统口吻） | 这是 MaiBot 主程序的权限提示，不是本插件的。本插件的提示是中文"您无权进行此类操作"。检查是否和别的插件命令名撞了 |
 | 插件加载失败 | 看 MaiBot 日志。常见：`manifest_version` 不是 2、`maibot_sdk` 没装、MaiBot 版本低于 1.3.0 |
