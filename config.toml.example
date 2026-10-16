@@ -33,6 +33,7 @@ error_prefix = "人格热更新失败"
 optimize_success_message = "人格优化成功"
 optimize_failure_message = "人格优化失败"
 optimize_nochange_message = "人格已足够精简，无需优化"
+optimize_send_card = true
 
 [behavior]
 enabled = true

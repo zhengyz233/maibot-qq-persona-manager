@@ -300,6 +300,14 @@ class MessageConfig(PluginConfigBase):
         default="人格已足够精简，无需优化",
         description="/人格优化 跑完模型，但改写结果与原文一致（没有可优化的地方）时的提示。",
     )
+    optimize_send_card: bool = Field(
+        default=True,
+        description=(
+            "优化成功后，额外把优化后的三段人格以合并转发（聊天记录卡片）的形式发出来，"
+            "和 /人格查询 的卡片一样，方便直接看到优化后的效果。"
+            "关闭后只回一句「人格优化成功」。"
+        ),
+    )
 
 
 class BehaviorConfig(PluginConfigBase):
@@ -633,44 +641,7 @@ class QQPersonaManagerPlugin(MaiBotPlugin):
             await self._reply(stream_id, f"{self._conf().message.error_prefix}：读取当前人格失败")
             return False, "读取人格失败", 2
 
-        labels = (
-            config.message.cat_personality,
-            config.message.cat_behavior_style,
-            config.message.cat_reply_style,
-        )
-        texts = (
-            current["personality"] or "（当前未设置）",
-            current["behavior_style"] or "（当前未设置）",
-            current["reply_style"] or "（当前未设置）",
-        )
-
-        def render(label: str, text: str) -> str:
-            """生成单段正文。
-
-            合并转发的节点"发送者名字"在多数 QQ 适配器上会被渲染成账号昵称，
-            而不是我们传进去的 nickname，所以标签只写在名字上等于没写。
-            默认把分类标签顶在正文最前面，一眼就能分清哪段是哪类。
-            """
-
-            body = f"{label}\n{text}" if config.message.label_in_content else text
-            return self._clip(body, MAX_FORWARD_TEXT_LENGTH)
-
-        nodes = [
-            {
-                "user_id": "0",
-                "nickname": label,
-                "segments": [{"type": "text", "content": render(label, text)}],
-            }
-            for label, text in zip(labels, texts, strict=True)
-        ]
-
-        sent = await self.ctx.send.forward(nodes, stream_id)
-        if not sent:
-            self.ctx.logger.warning("合并转发发送失败，退回普通文本发送。")
-            plain = "\n\n".join(render(label, text) for label, text in zip(labels, texts, strict=True))
-            sent = await self.ctx.send.text(plain, stream_id)
-
-        if not sent:
+        if not await self._send_persona_card(stream_id, current):
             return False, "人格查询结果发送失败", 2
         return True, "已发送人格查询结果", 2
 
@@ -852,6 +823,14 @@ class QQPersonaManagerPlugin(MaiBotPlugin):
             ", ".join(updates),
         )
         await self._reply(stream_id, config.message.optimize_success_message)
+        if config.message.optimize_send_card:
+            # 优化成功后附带一张跟 /人格查询 一样的合并转发卡片，
+            # 让用户直接看到优化后的人格长什么样。
+            # 卡片发失败不影响已经完成的优化，所以只记日志、不改返回值。
+            try:
+                await self._send_persona_card(stream_id, optimized)
+            except Exception as exc:
+                self.ctx.logger.warning("优化后回显人格卡片失败（优化本身已成功）：%s", exc, exc_info=True)
         return True, "人格优化成功", 2
 
     @Command(
@@ -1227,6 +1206,65 @@ class QQPersonaManagerPlugin(MaiBotPlugin):
         if len(text) <= limit:
             return text
         return text[:limit] + "……（内容过长已截断）"
+
+    async def _send_persona_card(self, stream_id: str, persona: dict[str, str]) -> bool:
+        """把三段人格以合并转发（聊天记录卡片）发到聊天流。
+
+        抽成独立方法是因为 /人格查询 与 /人格优化（优化成功后回显新人格）都要用同一套渲染，
+        保证两处的标签、截断、降级行为完全一致。
+
+        Args:
+            persona: 至少包含 personality / behavior_style / reply_style 三个键。
+
+        Returns:
+            是否成功发出（合并转发成功，或降级后的普通文本成功）。
+        """
+
+        config = self._conf()
+        labels = (
+            config.message.cat_personality,
+            config.message.cat_behavior_style,
+            config.message.cat_reply_style,
+        )
+        texts = tuple(
+            (persona.get(category) or "").strip() or "（当前未设置）" for category in CATEGORY_ORDER
+        )
+
+        def render(label: str, text: str) -> str:
+            """生成单段正文。
+
+            合并转发的节点"发送者名字"在多数 QQ 适配器上会被渲染成账号昵称，
+            而不是我们传进去的 nickname，所以标签只写在名字上等于没写。
+            默认把分类标签顶在正文最前面，一眼就能分清哪段是哪类。
+            """
+
+            body = f"{label}\n{text}" if config.message.label_in_content else text
+            return self._clip(body, MAX_FORWARD_TEXT_LENGTH)
+
+        nodes = [
+            {
+                "user_id": "0",
+                "nickname": label,
+                "segments": [{"type": "text", "content": render(label, text)}],
+            }
+            for label, text in zip(labels, texts, strict=True)
+        ]
+
+        try:
+            sent = await self.ctx.send.forward(nodes, stream_id)
+        except Exception as exc:
+            self.ctx.logger.warning("合并转发发送异常，改用普通文本：%s", exc)
+            sent = False
+        if sent:
+            return True
+
+        self.ctx.logger.warning("合并转发发送失败，退回普通文本发送。")
+        plain = "\n\n".join(render(label, text) for label, text in zip(labels, texts, strict=True))
+        try:
+            return bool(await self.ctx.send.text(plain, stream_id))
+        except Exception as exc:
+            self.ctx.logger.error("降级后的普通文本也发送失败：%s", exc, exc_info=True)
+            return False
 
     # ---------------------------------------------------------------- 配置读取
 
