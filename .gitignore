@@ -1,0 +1,26 @@
+# 插件运行配置：Runner 首次加载时自动生成，每个用户的 QQ 号都不一样，不要提交
+/config.toml
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+*.egg-info/
+
+# 编辑器与系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 日志与临时文件
+*.log
+*.tmp
+
+# 备份目录（插件把 bot_config.toml 的备份写在这里）
+/backups/
+/data/
