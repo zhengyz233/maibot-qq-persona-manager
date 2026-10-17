@@ -77,9 +77,14 @@ MaiBot/
 
 **方式 B（直接改文件）**
 
-插件第一次加载后会自动生成 `plugins/qq-persona-manager/config.toml`。仓库里的
-`config.toml.example` 就是它的完整内容 —— 如果你的 `config.toml` 缺失或损坏，
-把它复制过去、改名为 `config.toml` 即可。
+插件第一次加载后，MaiBot 会自动生成 `plugins/qq-persona-manager/config.toml`
+—— 内容由插件的配置模型按默认值生成，每个字段的含义在 WebUI 配置页里都有中文说明。
+
+> **本仓库不再附带 `config.toml.example` 模板**：配置结构的唯一定义就在 `plugin.py`
+> 的 `PersonaManagerConfig`（配置模型）里，再留一份模板只会和它漂移。
+> 想看默认值，去 WebUI 配置页（或看「四、插件配置项说明」里的表格）；
+> 万一 `config.toml` 坏了，**删掉它让 MaiBot 重新生成一份**即可
+> （⚠️ 重建会清空白名单，先把 QQ 号记下来）。
 
 用记事本打开，改成（**请整体保留 `[plugin]` 段**）：
 
@@ -123,7 +128,7 @@ model_list = ["你的模型名"]
 
 - **git 安装的**：进 `plugins/qq-persona-manager/` 执行 `git pull`，然后在 WebUI 插件页点重载。
 - **手动复制安装的**：重新下载新版，用新的 `plugin.py` 和 `_manifest.json` 覆盖旧的即可。
-  **别删 `config.toml`**（里面是你的白名单和配置）。
+  **别删 `config.toml`**（里面是你的白名单和配置；只有排错需要重建时才删，见「六、出问题了？」第一条）。
 - 升级后若插件页报配置缺少 `[plugin]` 段，按「六、出问题了？」里第一条处理。
 
 ---
@@ -266,7 +271,10 @@ optimize_allow_group = false   # false（默认）= 只有私聊能优化；true
 ## 四、插件配置项说明
 
 WebUI 里能改，也可以直接编辑 `plugins/qq-persona-manager/config.toml`。
-完整默认内容见仓库里的 [`config.toml.example`](./config.toml.example)。
+
+所有字段的**类型、默认值与中文说明都由 `plugin.py` 里的 `PersonaManagerConfig`（配置模型）定义**，
+MaiBot 会据此自动生成 WebUI 表单和默认的 `config.toml` —— 所以**本仓库不再提供模板文件**，
+配置模型的定义就是唯一真源。下面各表即是完整清单。
 
 ### `[plugin]` 插件信息
 
@@ -357,7 +365,7 @@ WebUI 里能改，也可以直接编辑 `plugins/qq-persona-manager/config.toml`
 
 | 现象 | 原因 & 处理 |
 |---|---|
-| 插件页报「插件配置文件缺少 `[plugin]` 配置节，且必须提供 `plugin.config_version` 版本号」，提示"配置错误，业务暂停" | `config.toml` 缺少 `[plugin]` 段。**① 最简单**：把仓库里的 `config.toml.example` 复制过去、改名为 `config.toml` 覆盖；**② 手动**：在文件**最前面**补上这两行 `[plugin]` 和 `config_version = "1.0.0"`，保存。⚠️ 注意：只要文件里**有内容却缺这一段**，校验就会失败；文件整个为空反而会被自动补全。补好后插件会自动恢复运行 |
+| 插件页报「插件配置文件缺少 `[plugin]` 配置节，且必须提供 `plugin.config_version` 版本号」，提示"配置错误，业务暂停" | `config.toml` 缺少 `[plugin]` 段。**① 推荐（不动白名单）**：在文件**最前面**补上这两行 `[plugin]` 和 `config_version = "1.0.0"`，保存。**② 重建**：删掉 `config.toml` 后在插件页重载，MaiBot 会按配置模型生成一份完整的 —— ⚠️ **重建会清空白名单**，务必先把 QQ 号记下来。⚠️ 注意：只要文件里**有内容却缺这一段**，校验就会失败；文件整个为空反而会被自动补全。补好后插件会自动恢复运行 |
 | 别人只是**引用了**我发过的指令，插件却被触发了 | v1.3.0 已修复。请确认插件版本 ≥ 1.3.0，并且 `[behavior] ignore_quoted_commands` 是 `true`（默认值就是）。原理：MaiBot 会把被引用消息的正文拼到待匹配文本最前面，插件只能在指令入口做二次判定把它拦掉 |
 | 发指令完全没反应 | ① 白名单没填 → 所有人被拒（但这时应该会收到"您无权…"，如果连这个都没有就往下看）；② 插件没加载，去 WebUI 插件页看状态；③ 指令必须**以 `/` 开头**且单独成句 |
 | 提示"没有权限"（英文/系统口吻） | 这是 MaiBot 主程序的权限提示，不是本插件的。本插件的提示是中文"您无权进行此类操作"。检查是否和别的插件命令名撞了 |
