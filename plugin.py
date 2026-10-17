@@ -209,6 +209,14 @@ class ScopeConfig(PluginConfigBase):
         default=False,
         description="/人格优化 的群聊执行开关。关闭（默认）时该指令只在私聊生效；打开后白名单用户也可以在群聊里优化人格。",
     )
+    modify_allow_group: bool = Field(
+        default=True,
+        description=(
+            "/人格修改 的群聊执行开关。**默认开启**，与 1.8.0 之前的行为一致（群里可以直接改人格）。"
+            "关闭后，白名单用户在群聊发送 /人格修改 也会收到「暂不支持群聊使用此功能」的提示，只能在私聊里改。"
+            "注意：/人格修改 是三条指令里**唯一会写配置**的 —— 如果不希望群里有人改动麦麦的人格，把它关掉。"
+        ),
+    )
     query_group_disabled_message: str = Field(
         default=DEFAULT_GROUP_DISABLED_MESSAGE,
         description="群聊执行开关关闭时，白名单用户在群聊发送 /人格查询 或 /人格优化 收到的提示。",
@@ -334,7 +342,12 @@ class BehaviorConfig(PluginConfigBase):
     backup_keep: int = Field(default=20, description="最多保留多少个备份文件。")
     config_path: str = Field(
         default="",
-        description="bot_config.toml 的绝对路径。留空则自动定位，一般不需要填。",
+        description=(
+            "bot_config.toml 的绝对路径。留空则自动定位，一般不需要填。"
+            "说明：本插件以文件级写入的方式更新人格 —— 当前 SDK 未提供任何写宿主全局配置的接口"
+            "（config.* 只读、component.update_plugin_config 仅限插件自身、person.* 只读），"
+            "这是现有 SDK 下唯一可行的手段，而非有意绕过宿主。"
+        ),
     )
     max_requirement_length: int = Field(
         default=DEFAULT_MAX_REQUIREMENT_LENGTH,
@@ -582,6 +595,23 @@ class QQPersonaManagerPlugin(MaiBotPlugin):
         else:
             self.ctx.logger.info("白名单已载入，共 %d 个 QQ 号。", len(whitelist))
 
+        # 场景兜底的取向提示：默认偏松（按私聊放行），与权限判定「未知即拒绝」取向不一致，让使用者知情。
+        if not config.scope.treat_unknown_scope_as_group:
+            self.ctx.logger.warning(
+                "场景兜底取向偏松：实在判断不出消息来自群聊还是私聊时，会按【私聊】放行"
+                "（权限判定的兜底是「取不到 user_id 就拒绝」，两处取向不一致）。"
+                "若你的适配器上报信息不全、希望收紧，可在插件配置「限用范围」里把 "
+                "treat_unknown_scope_as_group 改为 true（改为按群聊处理，进而被群聊开关拦下）。"
+            )
+
+        # 人格写入方式的知情提示：说明为何必须文件级写入，以及已知限制。
+        self.ctx.logger.info(
+            "人格更新方式：文件级写入 config/bot_config.toml —— 这是当前 SDK 下唯一可行的手段"
+            "（SDK 未提供任何写宿主全局配置的接口：config.* 只读、component.update_plugin_config 仅限插件自身、"
+            "person.* 只读）。已知限制：与宿主 WebUI 之间没有跨进程文件锁，同时保存可能互相覆盖。"
+            "已启用写前备份 / tomllib 校验 / 字段白名单 / dry_run 四道防护，详见 README 第八节。"
+        )
+
         path = self._find_config_path()
         if path is None:
             self.ctx.logger.warning(
@@ -665,6 +695,9 @@ class QQPersonaManagerPlugin(MaiBotPlugin):
         allowed, user_id = await self._check_permission(stream_id, kwargs)
         if not allowed:
             return True, f"无权限（user_id={user_id or '未知'}）", 2
+
+        if not await self._check_modify_scope(stream_id, kwargs):
+            return True, "群聊执行开关未打开", 2
 
         requirement = self._extract_requirement(kwargs)
         if not requirement:
@@ -1025,6 +1058,19 @@ class QQPersonaManagerPlugin(MaiBotPlugin):
             kwargs,
             allowed=self._conf().scope.optimize_allow_group,
             command="/人格优化",
+        )
+
+    async def _check_modify_scope(self, stream_id: str, kwargs: dict[str, Any]) -> bool:
+        """检查 /人格修改 是否允许在当前场景使用。
+
+        v1.8.0 起 /人格修改 也有了独立的群聊开关（默认开启，行为与此前一致）。
+        """
+
+        return await self._check_group_scope(
+            stream_id,
+            kwargs,
+            allowed=self._conf().scope.modify_allow_group,
+            command="/人格修改",
         )
 
     # ---------------------------------------------------------------- 权限
